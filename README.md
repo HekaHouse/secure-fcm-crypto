@@ -20,10 +20,14 @@
       shared-secret="{{SHARED SECRET}}"></secure-fcm-crypto>
 
 The following properties must be populated with base64 strings prior to calling encrypt:
-    polyPublicKey (created new for each message you encrypt)
-    clientAuthSecret (provided with service worker subscription to FCM/GCM)
-    receiverKey (provided with service worker subscription to FCM/GCM)
-    sharedSecret (derived from polyPublicKey and receiverKey used as basis for encryption key)
+
+polyPublicKey (created new for each message you encrypt)
+
+clientAuthSecret (provided with service worker subscription to FCM/GCM)
+
+receiverKey (provided with service worker subscription to FCM/GCM)
+
+sharedSecret (derived from polyPublicKey and receiverKey used as basis for encryption key)
 
 ## Note
 
