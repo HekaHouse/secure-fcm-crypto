@@ -1,0 +1,343 @@
+<link rel="import" href="../bower_components/polymer/polymer.html">
+
+<!--
+# secure-fcm-crypto
+
+`<secure-fcm-crypto>` A polymer element providing cloud messaging payload encryption.
+
+[API Docs and Demo](https://heka-house-polymer-demos.firebaseapp.com/secure-fcm-crypto)
+
+[Source](http://github.com/hekahouse/secure-fcm-crypto/)
+
+
+## Install
+
+    bower install --save HekaHouse/secure-fcm-crypto
+
+## Example
+
+    <secure-fcm-crypto
+      poly-public-key="{{APP PUBLIC KEY}}"
+      client-auth-secret="{{FCM AUTH SECRET}}"
+      receiver-key="{{FCM P256 KEY}}"
+      shared-secret="{{SHARED SECRET}}"></secure-fcm-crypto>
+
+The following properties must be populated with base64 strings prior to calling encrypt:
+    polyPublicKey (created new for each message you encrypt)
+    clientAuthSecret (provided with service worker subscription to FCM/GCM)
+    receiverKey (provided with service worker subscription to FCM/GCM)
+    sharedSecret (derived from polyPublicKey and receiverKey used as basis for encryption key)
+
+## Note
+
+Process is based on [instructions from Google](https://developers.google.com/web/updates/2016/03/web-push-encryption?hl=en)
+
+## Dependencies
+
+Element dependencies are managed via [Bower](http://bower.io/). You can
+install that via:
+
+    npm install -g bower
+
+Then, go ahead and download the element's dependencies:
+
+    bower install
+
+secure-fcm-crypto depends on
+
+[secure-utils](http://github.com/hekahouse/secure-utils/)
+
+includes embedded browser version of Buffer from Node.js
+
+## Related
+
+[secure-ecdh-secret](http://github.com/hekahouse/secure-ecdh-secret/)
+
+[service-worker-subscription](http://github.com/hekahouse/secure-ecdh-secret/)
+
+@group HekaHouse
+@element secure-fcm-crypto
+-->
+
+<dom-module id="secure-fcm-crypto">
+  <template>
+  <style>
+    :host {
+      display: block;
+    }
+  </style>
+  <secure-utils id="utils"></secure-utils>
+  </template>
+</dom-module>
+
+<script src="pseudo-node/buffer.js"></script>
+
+<script>
+  Polymer({
+    is: 'secure-fcm-crypto',
+    properties: {
+      // base64 representation of incoming GCM auth secret
+      clientAuthSecret: {
+        type: String,
+        notify: true
+      },
+      // base64 representation of incoming GCM public key
+      receiverKey: {
+        type: String,
+        notify: true
+      },
+      // base64 representation of "server" public key
+      polyPublicKey: {
+        type: String,
+        notify: true
+      },
+      receiverKey: {
+        type: Object,
+        notify: true
+      },
+      // base64 representation of nonce
+      nonce: {
+        type: String,
+        notify: true
+      },
+      // Uint8Array with padded message
+      toEncrypt: {
+        type: Array,
+        notify: true
+      },
+      // base64 representation of shared secret
+      sharedSecret: {
+        type: String,
+        notify: true
+      },
+      encryptionKey: {
+        type: Object,
+        notify: true
+      },
+      isInitialized: {
+        type: Boolean,
+        value: false,
+        notify: true
+      }
+    },
+    observers: ['_initialize(polyPublicKey,clientAuthSecret,sharedSecret,receiverKey)'],
+
+    _initialize: function(polyPublicKey, clientAuthSecret, sharedSecret, receiverKey) {
+      isInitialized = true;
+    },
+    encrypt: function(plain_text) {
+
+      if (!this.isInitialized) {
+        throw 'encryption requires initialization still';
+      } else {
+
+
+        /*
+        *Now we need the final content encryption key and a nonce that will be passed to the cipher.
+        *These are created by making a simple data structure for each,
+        *referred to in the spec as an info, that contains information specific to the elliptic curve,
+        *sender and receiver of the information in order to further verify the message’s source.
+        *Then we use HKDF with the PRK, our salt and the info to derive the key and nonce of the correct size.
+        */
+
+        //create new salt for every encryption
+        this.salt = this.$.utils.generateSaltBase64(16);
+
+        var authInfo = buffer.Buffer('Content-Encoding: auth\0', 'utf8');
+
+        /*
+        *The first thing we do is use HKDF to mix the client auth secret
+        *and the shared secret into a longer, more cryptographically secure secret.
+        *In the spec this is referred to as a Pseudo-Random Key (PRK)
+        *so that’s what I’ll call it here,
+        *though cryptography purists may note that this isn’t strictly a PRK.
+        */
+        var prk = this.$.utils.base64fromByteArray(this._hkdf(this.clientAuthSecret, this.sharedSecret, authInfo, 32)).replace(/-/g, '+').replace(/_/g, '/');
+
+        // Derive the Content Encryption Key
+        var contentEncryptionKeyInfo = this._createInfo('aesgcm', this.receiverKey, polyPublicKey);
+        var contentEncryptionKey = this._hkdf(this.salt, prk, contentEncryptionKeyInfo, 16);
+
+        // Derive the Nonce
+        var nonceInfo = this._createInfo('nonce', this.receiverKey, this.polyPublicKey);
+        this.nonce = this._hkdf(this.salt, prk, nonceInfo, 12);
+
+        // create and apply padding
+        var paddingLength = 32;
+        var padding = this.$.utils._getPadding(32, buffer);
+        var textArray = this.$.utils.textToTypedArray(plain_text);
+        var buffering = Buffer.concat(buffer.Buffer(padding), buffer.Buffer(textArray));
+
+        this.toEncrypt = new Uint8Array(fromNodeBuffer(buffering));
+
+        this._initiateCryptoKey(contentEncryptionKey);
+
+        this._storeSecureData(contentEncryptionKey, this.salt, this.nonce);
+
+      }
+    },
+    _storeSecureData(key,salt,nonce) {
+      //TO DO
+    },
+    _initiateCryptoKey: function(encryptionKey) {
+      window.crypto.subtle.importKey(
+          "raw", //can be "jwk" or "raw"
+          new Uint8Array(encryptionKey).buffer,
+          {   //this is the algorithm options
+              name: "AES-GCM",
+          },
+          false, //whether the key is extractable (i.e. can be used in exportKey)
+          ["encrypt", "decrypt"] //can "encrypt", "decrypt", "wrapKey", or "unwrapKey"
+      )
+      .then(this._beginEncryption(key).bind(this))
+      .catch(function(err){
+          console.error(err);
+      });
+    },
+    _beginEncryption: function(key){
+        this.encryptionKey = key;
+        window.crypto.subtle.encrypt(
+            {
+                name: "AES-GCM",
+                iv: this._base64ToArrayBuffer(this.salt),
+                additionalData: new Uint8Array(this.nonce).buffer,
+                tagLength: 128, //can be 32, 64, 96, 104, 112, 120 or 128 (default)
+            },
+            key,
+            this.toEncrypt //ArrayBuffer of data you want to encrypt
+        )
+        .then(_encryptionComplete(encryptedBuff).bind(this))
+        .catch(function(err){
+            console.error(err);
+        });
+
+    },
+    _encryptionComplete: function(encryptedBuff){
+        this.encrypted = this._arrayBufferToBase64(encryptedBuff);
+        console.log(new Uint8Array(encrypted));
+
+        window.crypto.subtle.decrypt(
+            {
+                name: "AES-GCM",
+                iv: actor._base64ToArrayBuffer(salt), //The initialization vector you used to encrypt
+                additionalData: new Uint8Array(this.nonce).buffer, //The addtionalData you used to encrypt (if any)
+                tagLength: 128, //The tagLength you used to encrypt (if any)
+            },
+            actor.encryptionKey, //from generateKey or importKey above
+            encrypted //ArrayBuffer of the data
+        )
+        .then(function(decrypted){
+            //returns an ArrayBuffer containing the decrypted data
+            console.log(String.fromCharCode.apply(null, new Uint8Array(decrypted)));
+        }.bind(actor))
+        .catch(function(err){
+            console.error(err);
+        });
+    },
+    _beginDecryption: function(key){
+        this.encryptionKey = key;
+        window.crypto.subtle.decrypt(
+            {
+                name: "AES-GCM",
+                iv: this._base64ToArrayBuffer(this.salt),
+                additionalData: new Uint8Array(this.nonce).buffer,
+                tagLength: 128, //can be 32, 64, 96, 104, 112, 120 or 128 (default)
+            },
+            this.encryptionKey,
+            this.encrypted //ArrayBuffer of data you want to decrypt
+        )
+        .then(_decryptionComplete(encryptedBuff).bind(this))
+        .catch(function(err){
+            console.error(err);
+        });
+
+    },
+    _decryptionComplete: function(decryptedBuff){
+        this.decrypted = atob(this._arrayBufferToBase64(decryptedBuff));
+    },
+    //use the HMAC-based Key Derivation Function (HKDF)
+    //to turn a secret with low security into one with high security
+    _hkdf: function hkdf(salt, ikm, info, length) {
+      // Simplified HKDF, returning keys up to 32 bytes long
+      if (length > 32) {
+        throw new Error('Cannot return keys of more than 32 bytes, ${length} requested');
+      }
+
+      // Extract
+      var keyHmac = new Hmac(SHA256, this._base64ToArrayBuffer(salt), 'hex');
+      keyHmac.update(ikm);
+      var key = keyHmac.digest();
+
+      // Expand
+      var infoHmac = new Hmac(SHA256, key, 'hex');
+      infoHmac.update(info);
+      // A one byte long buffer containing only 0x01
+      //var ONE_BUFFER = buffer.Buffer(1).fill(1);
+      infoHmac.update(0x01);
+      return infoHmac.digest().slice(0, length);
+    },
+    _createInfo: function(type, receiverKey, serverPublicKey) {
+      var len = type.length;
+
+      // The start index for each element within the buffer is:
+      // value               | length | start    |
+      // -----------------------------------------
+      // 'Content-Encoding: '| 18     | 0        |
+      // type                | len    | 18       |
+      // nul byte            | 1      | 18 + len |
+      // 'P-256'             | 5      | 19 + len |
+      // nul byte            | 1      | 24 + len |
+      // client key length   | 2      | 25 + len |
+      // client key          | 65     | 27 + len |
+      // server key length   | 2      | 92 + len |
+      // server key          | 65     | 94 + len |
+      // For the purposes of push encryption the length of the keys will
+      // always be 65 bytes.
+      var info = buffer.Buffer(18 + len + 1 + 5 + 1 + 2 + 65 + 2 + 65);
+
+      // The string 'Content-Encoding: ', as utf-8
+      info.write('Content-Encoding: ');
+      // The 'type' of the record, a utf-8 string
+      info.write(type, 18);
+      // A single null-byte
+      info.write('\0', 18 + len);
+      // The string 'P-256', declaring the elliptic curve being used
+      info.write('P-256', 19 + len);
+      // A single null-byte
+      info.write('\0', 24 + len);
+      // The length of the client's public key as a 16-bit integer
+      info.writeUInt16BE(receiverKey.length, 25 + len);
+      // Now the actual client public key
+      var buffed = new buffer.Buffer(new Uint8Array(receiverKey).length);
+      var nodeCPK = this._toNodeBuffer(receiverKey, buffed);
+      nodeCPK.copy(info, 27 + len);
+
+      // Length of our public key
+      info.writeUInt16BE(serverPublicKey.length, 92 + len);
+      // The key itself
+
+      var buffed = new buffer.Buffer(new Uint8Array(serverPublicKey).length);
+      var nodeSPK = this._toNodeBuffer(serverPublicKey, buffed);
+      nodeSPK.copy(info, 94 + len);
+
+      return info;
+    },
+    // from node buffer to arraybuffer
+    fromNodeBuffer: function(buffer) {
+        var ab = new ArrayBuffer(buffer.length);
+        var view = new Uint8Array(ab);
+        for (var i = 0; i < buffer.length; ++i) {
+            view[i] = buffer[i];
+        }
+        return ab;
+    },
+    // From ArrayBuffer to Buffer:
+    toNodeBuffer: function(ab, buffer) {
+        var view = new Uint8Array(ab);
+        for (var i = 0; i < buffer.length; ++i) {
+            buffer[i] = view[i];
+        }
+        return buffer;
+    }
+  });
+</script>
