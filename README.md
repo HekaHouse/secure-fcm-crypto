@@ -48,4 +48,4 @@ secure-fcm-crypto depends on
 
 [secure-ecdh-secret](http://github.com/hekahouse/secure-ecdh-secret/)
 
-[service-worker-subscription](http://github.com/hekahouse/secure-ecdh-secret/)
+[service-worker-subscription](http://github.com/hekahouse/service-worker-subscription/)
