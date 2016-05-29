@@ -48,6 +48,8 @@ secure-fcm-crypto depends on
 
 [secure-utils](http://github.com/hekahouse/secure-utils/)
 
+includes embedded browser version of Buffer from Node.js
+
 ## Related
 
 [secure-ecdh-secret](http://github.com/hekahouse/secure-ecdh-secret/)
