@@ -1,4 +1,4 @@
-<link rel="import" href="../bower_components/polymer/polymer.html">
+
 
 <!--
 # secure-fcm-crypto
@@ -99,8 +99,15 @@ includes embedded browser version of Buffer from Node.js
         type: Object,
         notify: true
       },
-      // base64 representation of nonce
       nonce: {
+        type: Array
+      },
+      // base64 representation of nonce
+      nonceStr: {
+        type: String,
+        notify: true
+      },
+      salt: {
         type: String,
         notify: true
       },
@@ -114,25 +121,45 @@ includes embedded browser version of Buffer from Node.js
         type: String,
         notify: true
       },
+      encrypted: {
+        type: String,
+        notify: true
+      },
+      decrypted: {
+        type: String,
+        notify: true
+      },
       encryptionKey: {
         type: Object,
+        notify: true
+      },
+      encryptionKeyStr: {
+        type: String,
         notify: true
       },
       isInitialized: {
         type: Boolean,
         value: false,
         notify: true
+      },
+      plainText: {
+        type: String
       }
     },
-    observers: ['_initialize(polyPublicKey,clientAuthSecret,sharedSecret,receiverKey)'],
+    observers: ['_initialize(polyPublicKey,clientAuthSecret,sharedSecret,receiverKey)','autoEncrypt(plainText,isInitialized)'],
 
     _initialize: function(polyPublicKey, clientAuthSecret, sharedSecret, receiverKey) {
-      isInitialized = true;
+      this.isInitialized = true;
     },
-    encrypt: function(plain_text) {
+    autoEncrypt: function(plainText,isInitialized) {
+      if (this.isInitialized) {
+        this.encrypt(plainText);
+      }
+    },
+    encrypt: function(plainText) {
 
       if (!this.isInitialized) {
-        throw 'encryption requires initialization still';
+        throw 'encryption requires initialization';
       } else {
 
 
@@ -159,20 +186,20 @@ includes embedded browser version of Buffer from Node.js
         var prk = this.$.utils.base64fromByteArray(this._hkdf(this.clientAuthSecret, this.sharedSecret, authInfo, 32)).replace(/-/g, '+').replace(/_/g, '/');
 
         // Derive the Content Encryption Key
-        var contentEncryptionKeyInfo = this._createInfo('aesgcm', this.receiverKey, polyPublicKey);
+        var contentEncryptionKeyInfo = this._createInfo('aesgcm', this.receiverKey, this.polyPublicKey);
         var contentEncryptionKey = this._hkdf(this.salt, prk, contentEncryptionKeyInfo, 16);
 
         // Derive the Nonce
         var nonceInfo = this._createInfo('nonce', this.receiverKey, this.polyPublicKey);
         this.nonce = this._hkdf(this.salt, prk, nonceInfo, 12);
 
-        // create and apply padding
+        //create and apply padding
         var paddingLength = 32;
-        var padding = this.$.utils._getPadding(32, buffer);
-        var textArray = this.$.utils.textToTypedArray(plain_text);
-        var buffering = Buffer.concat(buffer.Buffer(padding), buffer.Buffer(textArray));
+        var padding = this.$.utils.getPadding(32, buffer);
+        var textArray = this.$.utils.textToTypedArray(plainText);
+        var buffering = buffer.Buffer.concat([buffer.Buffer(padding), buffer.Buffer(textArray)]);
 
-        this.toEncrypt = new Uint8Array(fromNodeBuffer(buffering));
+        this.toEncrypt = textArray;
 
         this._initiateCryptoKey(contentEncryptionKey);
 
@@ -180,8 +207,16 @@ includes embedded browser version of Buffer from Node.js
 
       }
     },
+    decrypt: function() {
+      if (!this.isInitialized |! this.encryptionKey) {
+        throw 'decryption requires initialization and an existing encryption key';
+      } else {
+        this._beginDecryption();
+      }
+    },
     _storeSecureData(key,salt,nonce) {
-      //TO DO
+      this.encryptionKeyStr = this.$.utils.arrayBufferToBase64(new Uint8Array(nonce).buffer);
+      this.nonceStr = this.$.utils.arrayBufferToBase64(new Uint8Array(nonce).buffer);
     },
     _initiateCryptoKey: function(encryptionKey) {
       window.crypto.subtle.importKey(
@@ -193,7 +228,7 @@ includes embedded browser version of Buffer from Node.js
           false, //whether the key is extractable (i.e. can be used in exportKey)
           ["encrypt", "decrypt"] //can "encrypt", "decrypt", "wrapKey", or "unwrapKey"
       )
-      .then(this._beginEncryption(key).bind(this))
+      .then(this._beginEncryption.bind(this))
       .catch(function(err){
           console.error(err);
       });
@@ -203,61 +238,41 @@ includes embedded browser version of Buffer from Node.js
         window.crypto.subtle.encrypt(
             {
                 name: "AES-GCM",
-                iv: this._base64ToArrayBuffer(this.salt),
+                iv: this.$.utils.base64ToArrayBuffer(this.salt),
                 additionalData: new Uint8Array(this.nonce).buffer,
                 tagLength: 128, //can be 32, 64, 96, 104, 112, 120 or 128 (default)
             },
-            key,
+            this.encryptionKey,
             this.toEncrypt //ArrayBuffer of data you want to encrypt
         )
-        .then(_encryptionComplete(encryptedBuff).bind(this))
+        .then(this._encryptionComplete.bind(this))
         .catch(function(err){
             console.error(err);
         });
 
     },
     _encryptionComplete: function(encryptedBuff){
-        this.encrypted = this._arrayBufferToBase64(encryptedBuff);
-        console.log(new Uint8Array(encrypted));
-
-        window.crypto.subtle.decrypt(
-            {
-                name: "AES-GCM",
-                iv: actor._base64ToArrayBuffer(salt), //The initialization vector you used to encrypt
-                additionalData: new Uint8Array(this.nonce).buffer, //The addtionalData you used to encrypt (if any)
-                tagLength: 128, //The tagLength you used to encrypt (if any)
-            },
-            actor.encryptionKey, //from generateKey or importKey above
-            encrypted //ArrayBuffer of the data
-        )
-        .then(function(decrypted){
-            //returns an ArrayBuffer containing the decrypted data
-            console.log(String.fromCharCode.apply(null, new Uint8Array(decrypted)));
-        }.bind(actor))
-        .catch(function(err){
-            console.error(err);
-        });
+        this.encrypted = this.$.utils.arrayBufferToBase64(encryptedBuff);
+        this.decrypt();
     },
-    _beginDecryption: function(key){
-        this.encryptionKey = key;
+    _beginDecryption: function(){
         window.crypto.subtle.decrypt(
             {
                 name: "AES-GCM",
-                iv: this._base64ToArrayBuffer(this.salt),
+                iv: this.$.utils.base64ToArrayBuffer(this.salt),
                 additionalData: new Uint8Array(this.nonce).buffer,
                 tagLength: 128, //can be 32, 64, 96, 104, 112, 120 or 128 (default)
             },
             this.encryptionKey,
-            this.encrypted //ArrayBuffer of data you want to decrypt
+            this.$.utils.base64ToArrayBuffer(this.encrypted)
         )
-        .then(_decryptionComplete(encryptedBuff).bind(this))
+        .then(this._decryptionComplete.bind(this))
         .catch(function(err){
             console.error(err);
         });
-
     },
     _decryptionComplete: function(decryptedBuff){
-        this.decrypted = atob(this._arrayBufferToBase64(decryptedBuff));
+        this.decrypted = atob(this.$.utils.arrayBufferToBase64(decryptedBuff));
     },
     //use the HMAC-based Key Derivation Function (HKDF)
     //to turn a secret with low security into one with high security
@@ -268,7 +283,7 @@ includes embedded browser version of Buffer from Node.js
       }
 
       // Extract
-      var keyHmac = new Hmac(SHA256, this._base64ToArrayBuffer(salt), 'hex');
+      var keyHmac = new Hmac(SHA256, this.$.utils.base64ToArrayBuffer(salt), 'hex');
       keyHmac.update(ikm);
       var key = keyHmac.digest();
 
@@ -327,7 +342,7 @@ includes embedded browser version of Buffer from Node.js
       return info;
     },
     // from node buffer to arraybuffer
-    fromNodeBuffer: function(buffer) {
+    _fromNodeBuffer: function(buffer) {
         var ab = new ArrayBuffer(buffer.length);
         var view = new Uint8Array(ab);
         for (var i = 0; i < buffer.length; ++i) {
@@ -336,7 +351,7 @@ includes embedded browser version of Buffer from Node.js
         return ab;
     },
     // From ArrayBuffer to Buffer:
-    toNodeBuffer: function(ab, buffer) {
+    _toNodeBuffer: function(ab, buffer) {
         var view = new Uint8Array(ab);
         for (var i = 0; i < buffer.length; ++i) {
             buffer[i] = view[i];
